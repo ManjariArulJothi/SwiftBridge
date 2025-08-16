@@ -4,7 +4,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# Allow CORS for development (optional)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -13,7 +12,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Store connected clients
 class ConnectionManager:
     def __init__(self):
         self.active_connections: dict[str, WebSocket] = {}
@@ -38,13 +36,11 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
     try:
         while True:
             data = await websocket.receive_text()
-            # Expect data in format: "recipient_username:message"
             recipient, message = data.split(":", 1)
             await manager.send_personal_message(message, recipient)
     except WebSocketDisconnect:
         manager.disconnect(websocket, username)
 
-# Optional: Simple HTML for testing
 @app.get("/")
 async def get():
     return HTMLResponse("""
