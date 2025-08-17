@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>File Sender (WebRTC + Fallback)</title>
+</head>
+<body>
+  <h2>File Sender (User A)</h2>
+  <input type="text" id="myId" placeholder="Your ID" />
+  <input type="text" id="targetId" placeholder="Receiver ID" />
+  <input type="file" id="fileInput" />
+  <button onclick="start()">Send File</button>
+
+  <p id="status"></p>
+
+  <script>
+    let ws, pc, dataChannel;
+    let myId, targetId, file;
+
+    const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+    async function start() {
+      myId = document.getElementById('myId').value;
+      targetId = document.getElementById('targetId').value;
+      file = document.getElementById('fileInput').files[0];
+
+      if (!file) return alert("Please select a file");
+
+      document.getElementById('status').innerText = "Connecting...";
+
+      ws = new WebSocket(`ws://${location.host}/ws/${myId}`);
+      ws.onmessage = async ({ data }) => {
+        const msg = JSON.parse(data);
+        if (msg.type === 'answer') {
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
+        } else if (msg.type === 'ice') {
+          pc.addIceCandidate(new RTCIceCandidate(msg.data));
+        }
+      };
+
+      pc = new RTCPeerConnection(servers);
+
+      let connected = false;
+      const timeout = setTimeout(() => {
+        if (!connected) {
+          document.getElementById('status').innerText = "P2P Failed. Uploading to cloud...";
+          fallbackUpload();
+        }
+      }, 10000); // 10 seconds timeout
+
+      dataChannel = pc.createDataChannel("fileChannel");
+      dataChannel.onopen = () => {
+        connected = true;
+        clearTimeout(timeout);
+        document.getElementById('status').innerText = "Sending via WebRTC...";
+        sendFileViaRTC(file);
+      };
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) sendSignal('ice', e.candidate);
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      sendSignal('offer', offer);
+    }
+
+    function sendSignal(type, data) {
+      ws.send(JSON.stringify({ to: targetId, data: { type, data } }));
+    }
+
+    async function sendFileViaRTC(file) {
+      const chunkSize = 16 * 1024;
+      const stream = file.stream().getReader();
+      const pump = async () => {
+        const { done, value } = await stream.read();
+        if (done) {
+          dataChannel.send("EOF");
+          document.getElementById('status').innerText = "File sent via P2P!";
+          return;
+        }
+        dataChannel.send(value);
+        pump();
+      };
+      pump();
+    }
+
+    async function fallbackUpload() {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const response = await fetch("http://localhost:9000/upload", {
+        method: "POST",
+        body: formData
+      });
+
+      const result = await response.json();
+      const file_id = result.file_id;
+
+      // Notify receiver to download from cloud
+      ws.send(JSON.stringify({
+        to: targetId,
+        data: {
+          type: "fallback",
+          data: { file_id }
+        }
+      }));
+
+      document.getElementById('status').innerText = "File uploaded to cloud.";
+    }
+  </script>
+</body>
+</html>

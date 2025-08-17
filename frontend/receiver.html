@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>File Receiver (WebRTC + Fallback)</title>
+</head>
+<body>
+  <h2>File Receiver (User B)</h2>
+  <input type="text" id="myId" placeholder="Your ID" />
+  <input type="text" id="senderId" placeholder="Sender ID" />
+  <button onclick="start()">Start Listening</button>
+
+  <p id="status"></p>
+  <a id="downloadLink" style="display:none;">Download Received File</a>
+
+  <script>
+    let ws, pc;
+    const receivedChunks = [];
+    let senderId;
+
+    const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+    function start() {
+      const myId = document.getElementById('myId').value;
+      senderId = document.getElementById('senderId').value;
+
+      ws = new WebSocket(`ws://${location.host}/ws/${myId}`);
+
+      pc = new RTCPeerConnection(servers);
+
+      pc.ondatachannel = (event) => {
+        const receiveChannel = event.channel;
+        receiveChannel.onmessage = handleData;
+        receiveChannel.onopen = () => {
+          document.getElementById('status').innerText = "Receiving file via WebRTC...";
+        };
+      };
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) sendSignal('ice', e.candidate);
+      };
+
+      ws.onmessage = async ({ data }) => {
+        const msg = JSON.parse(data);
+        if (msg.type === 'offer') {
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          sendSignal('answer', answer);
+        } else if (msg.type === 'ice') {
+          await pc.addIceCandidate(new RTCIceCandidate(msg.data));
+        } else if (msg.type === 'fallback') {
+          document.getElementById('status').innerText = "Downloading from cloud...";
+          downloadFromCloud(msg.data.file_id);
+        }
+      };
+    }
+
+    function sendSignal(type, data) {
+      ws.send(JSON.stringify({ to: senderId, data: { type, data } }));
+    }
+
+    function handleData(event) {
+      if (event.data === "EOF") {
+        const fileBlob = new Blob(receivedChunks);
+        const url = URL.createObjectURL(fileBlob);
+        const link = document.getElementById('downloadLink');
+        link.href = url;
+        link.download = "received_file";
+        link.innerText = "Download File";
+        link.style.display = "block";
+        document.getElementById('status').innerText = "File received via P2P!";
+      } else {
+        receivedChunks.push(event.data);
+      }
+    }
+
+    async function downloadFromCloud(file_id) {
+      const response = await fetch(`http://localhost:9000/download/${file_id}`);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.getElementById('downloadLink');
+      link.href = url;
+      link.download = "received_file";
+      link.innerText = "Download File";
+      link.style.display = "block";
+      document.getElementById('status').innerText = "Downloaded from cloud.";
+    }
+  </script>
+</body>
+</html>
